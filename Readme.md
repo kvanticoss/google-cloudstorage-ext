@@ -28,6 +28,7 @@ func main(){
 		panic(err)
 	}
 	// Do something with r which is a continous byte-stream of all objects in the bucket that
-	// starts with the prefix provided. virtual folders ("placehodlers") are ignored.
+    // starts with the prefix provided. virtual folders ("placehodlers") are ignored. mostly useful
+    // for reading json and text files.
 }
 ```
