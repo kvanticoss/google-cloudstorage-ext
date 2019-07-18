@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -62,8 +63,8 @@ func (rs *JSONRecordStreamer) WriteRecord(record interface{}) error {
 	if err != nil {
 		return err
 	}
-
-	w, err := rs.mwc.GetWriter(maybePartitions+"data_"+rs.hostName+"_{suffix}.json.gz", true)
+	nowStr := strconv.Itoa(int(time.Now().Unix()))
+	w, err := rs.mwc.GetWriter(maybePartitions+"data_"+rs.hostName+"_"+nowStr+"_{suffix}.json.gz", true)
 	if err != nil {
 		return err
 	}
