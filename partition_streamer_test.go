@@ -34,7 +34,7 @@ func TestMultiFileStreaming(t *testing.T) {
 	assert.Equal(
 		t,                      // test
 		gcsext.ErrIteratorStop, // Expected
-		gcsext.StreamRecords( // actual
+		gcsext.StreamJSONRecords( // actual
 			ctx,
 			NewWriterFactory,
 			func() (interface{}, error) { // Record iterator; creates 5k records

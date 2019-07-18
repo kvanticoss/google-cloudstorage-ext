@@ -30,8 +30,8 @@ type lastUpdateMsg struct {
 }
 
 // NewMultiWriterCache will dynamically open files for writing; not thread safe.
-func NewMultiWriterCache(opener func(path string) (wc WriteCloser, err error), ttl time.Duration) *MultiWriterCache {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewMultiWriterCache(ctx context.Context, opener func(path string) (wc WriteCloser, err error), ttl time.Duration) *MultiWriterCache {
+	ctx, cancel := context.WithCancel(ctx)
 	r := &MultiWriterCache{
 		cxtCancel:         cancel,
 		newSteamer:        opener,
@@ -66,6 +66,16 @@ func (mfw *MultiWriterCache) manageTTLExp(ctx context.Context, ttl time.Duration
 	for {
 		select {
 		case <-ctx.Done():
+			ttlMutex.Lock()
+			// Close all files
+			for k, _ := range mfw.lastAccess {
+				if w, ok := mfw.writers[k]; ok {
+					w.Close()
+					delete(mfw.writers, k)
+				}
+				delete(mfw.lastAccess, k)
+			}
+			ttlMutex.Unlock()
 			return
 		case now := <-ticker.C:
 			ttlMutex.Lock()
@@ -124,21 +134,3 @@ func (mfw *MultiWriterCache) GetWriter(path string, gzipStream bool) (io.Writer,
 	mfw.writers[path] = writer
 	return writer, err
 }
-
-/*
-func (mfw *MultiWriterCache) GetGzipWriter(path string) (io.Writer, error) {
-	log.Printf("GetGzipWriter: Locking %s", path)
-	mfw.mutex.Lock()
-	defer mfw.mutex.Unlock()
-	defer log.Printf("GetGzipWriter: Releasing lock %s", path)
-
-	gzipWriter, ok := mfw.gzipwriters[path]
-
-	log.Printf("GetGzipWriter: setting last access on key %s", path)
-	mfw.lastAccess[path] = time.Now()
-	if !ok {
-
-	}
-	return gzipWriter, nil
-}
-*/
