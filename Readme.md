@@ -1,3 +1,6 @@
+[![GoDoc](https://godoc.org/github.com/kvanticoss/google-cloudstorage-ext?status.svg)](https://godoc.org/github.com/kvanticoss/google-cloudstorage-ext) 
+[![go report](https://goreportcard.com/badge/github.com/kvanticoss/google-cloudstorage-ext)](https://goreportcard.com/report/github.com/kvanticoss/google-cloudstorage-ext) 
+
 ### google-cloudstorage-ext - Utilities for working with google cloud storage
 
 ### testing
