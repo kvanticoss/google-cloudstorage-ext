@@ -49,7 +49,7 @@ func (mfw *MultiWriterCache) Close() error {
 	mfw.mutex.Unlock()
 
 	for _, writer := range writercopy {
-		if err := writer.Close(); err != nil {
+		if err := writer.Close(); err != nil && err != hookedwritecloser.ErrAlreadyClosed { // since we don't want to have a mutex here, chances are that this can happen
 			me = append(me, err)
 		}
 	}
