@@ -106,3 +106,121 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 
 	return r, nil
 }
+
+// IterateJSONRecordsFilteredByPrefix returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
+// and that each file is saved in a sorted order)
+func IterateJSONRecordsFilteredByPrefix(
+	ctx context.Context,
+	bucket *storage.BucketHandle,
+	prefix string,
+	new func() interface{},
+	filter func(*storage.ObjectAttrs) bool,
+) (RecordIterator, error) {
+	// Deafult is to always keep everything
+	if filter == nil {
+		return nil, fmt.Errorf("Must provide filter-function; To read everything use ReadAllByPrefix")
+	}
+
+	q := &storage.Query{
+		Delimiter: "",
+		Prefix:    prefix,
+		Versions:  false,
+	}
+	it := bucket.Objects(ctx, q)
+	log.Printf("Reading query: %#v", q)
+
+	// Let's not require the Lesser interface to be implemented.
+	var itSorter func(iterators []RecordIterator) (RecordIterator, error)
+	tmp := new()
+	if _, ok := tmp.(Lesser); ok {
+		itSorter = SortedRecordIterator
+	} else {
+		itSorter = func(iterators []RecordIterator) (RecordIterator, error) {
+			var f func() (interface{}, error)
+			f = func() (interface{}, error) {
+				if len(iterators) == 0 {
+					return nil, ErrIteratorStop
+				}
+				rec, err := iterators[0]()
+				if err == ErrIteratorStop {
+					iterators = iterators[1:]
+					return f()
+				}
+				return rec, err
+			}
+			return f, nil
+		}
+	}
+
+	// Default iterator
+	currentFolderFileIterators := []RecordIterator{}
+	currentFolderIterator := func() (interface{}, error) {
+		return nil, ErrIteratorStop
+	}
+	return func() (interface{}, error) {
+		rec, err := currentFolderIterator()
+		if err == nil {
+			return rec, err
+		}
+		if err != ErrIteratorStop {
+			return rec, err
+		}
+
+		previousFolder := ""
+		for {
+			var or io.ReadCloser
+			var err error
+			objAttr, err := it.Next()
+			if err == iterator.Done {
+				if len(currentFolderFileIterators) > 0 {
+					currentFolderIterator, err = itSorter(currentFolderFileIterators)
+					if err != nil {
+						return nil, err
+					}
+					currentFolderFileIterators = []RecordIterator{}
+					return currentFolderIterator()
+				} else {
+					return nil, ErrIteratorStop
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+			if !filter(objAttr) {
+				continue
+			}
+			// Is virtual folder?
+			// TODO: Maybe paramatrize "/"
+			if strings.HasSuffix(objAttr.Name, "/") && bytes.Equal(objAttr.MD5, placeholderMD5) {
+				continue
+			}
+
+			// Fetch a proper reader
+			or, err = bucket.Object(objAttr.Name).NewReader(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if strings.HasSuffix(objAttr.Name, ".gz") {
+				or, err = gzip.NewReader(or)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			// Cools; let's create an interator
+			currentFileIterator := JSONRecordIterator(new, or)
+
+			currentFolder := objAttr.Name[:strings.LastIndex(objAttr.Name, "/")]
+			if currentFolder == previousFolder || previousFolder == "" {
+				currentFolderFileIterators = append(currentFolderFileIterators, currentFileIterator)
+			} else {
+				currentFolderIterator, err = itSorter(currentFolderFileIterators)
+				if err != nil {
+					return nil, err
+				}
+				currentFolderFileIterators = []RecordIterator{currentFileIterator}
+				return currentFolderIterator()
+			}
+		}
+	}, nil
+}

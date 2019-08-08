@@ -2,10 +2,11 @@ package gcsext
 
 import (
 	"context"
-	"github.com/json-iterator/go"
 	"os"
 	"strconv"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
 
 	"github.com/kvanticoss/google-cloudstorage-ext/gzip"
 )

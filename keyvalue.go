@@ -29,6 +29,15 @@ func (keyvals KeyValues) ToPartitionKey() string {
 	return strings.Join(partitions, "/")
 }
 
+// AsMap returns the orders KeyValue list as an unorderd map
+func (keyvals KeyValues) AsMap() map[string]string {
+	res := map[string]string{}
+	for _, kv := range keyvals {
+		res[kv.Key] = kv.Value
+	}
+	return res
+}
+
 // ToPrefixReadFilter turns the key values into AND:ed filename-predicates during ReadFilteredByPrefix() scans
 // It will return a (filter) function(string) bool which will answers the question "Does all the key value pairs exist as
 // hadoop encoded partition keys in the provided string". Only supports exact matches.
@@ -41,4 +50,19 @@ func (keyvals KeyValues) ToPrefixReadFilter() func(*storage.ObjectAttrs) bool {
 		}
 		return true
 	}
+}
+
+func GetKeyValuesFromString(s string) KeyValues {
+	res := KeyValues{}
+	for _, part := range strings.Split(s, "/") {
+		maybeKeyValue := strings.Split(part, "=")
+		if len(maybeKeyValue) == 2 {
+			maybeKey, err1 := url.QueryUnescape(maybeKeyValue[0])
+			maybeValue, err2 := url.QueryUnescape(maybeKeyValue[1])
+			if err1 == nil && err2 == nil {
+				res = append(res, KeyValue{Key: maybeKey, Value: maybeValue})
+			}
+		}
+	}
+	return res
 }
