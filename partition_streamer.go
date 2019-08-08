@@ -108,7 +108,7 @@ func (rs *JSONRecordStreamer) WriteRecord(record interface{}) error {
 	if err != nil {
 		return err
 	}
-	_, err = rs.mwc.Write(maybePartitions+"data_"+rs.hostName+"/_cluster="+cluster+"/{suffix}.json", append(d, recordDelimiter...))
+	_, err = rs.mwc.Write(maybePartitions+"data_"+rs.hostName+"_"+cluster+"_{suffix}.json", append(d, recordDelimiter...))
 	return err
 }
 
