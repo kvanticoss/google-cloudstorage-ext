@@ -2,7 +2,7 @@ package gcsext
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/json-iterator/go"
 	"os"
 	"strconv"
 	"time"
@@ -104,7 +104,7 @@ func (rs *JSONRecordStreamer) WriteRecord(record interface{}) error {
 	// within each cluster, all records must come in sorted order; which cluster should this record be appended to?
 	cluster := rs.findOptimalCluster(maybePartitions, record)
 
-	d, err := json.Marshal(record)
+	d, err := jsoniter.ConfigCompatibleWithStandardLibrary.Marshal(record)
 	if err != nil {
 		return err
 	}
