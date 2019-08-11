@@ -33,12 +33,12 @@ func ReadAllByPrefix(ctx context.Context, bucket *storage.BucketHandle, prefix s
 }
 
 // ReadFilteredByPrefix Reads all files one into 1 combined bytestream. Autoamtically handles decompression of .gz
-// only objects that filter(*storage.ObjectAttrs) bool returns true will be kept
+// only objects that predicate(*storage.ObjectAttrs) bool returns true will be kept
 // First error will close the stream.
-func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, prefix string, filter func(*storage.ObjectAttrs) bool) (io.ReadCloser, error) {
+func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, prefix string, predicate func(*storage.ObjectAttrs) bool) (io.ReadCloser, error) {
 	// Deafult is to always keep everything
-	if filter == nil {
-		return nil, fmt.Errorf("Must provide filter-function; To read everything use ReadAllByPrefix")
+	if predicate == nil {
+		return nil, fmt.Errorf("Must provide predicate-function; To read everything use ReadAllByPrefix")
 	}
 
 	q := &storage.Query{
@@ -52,50 +52,25 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 	r, w := io.Pipe()
 	bufferdWriter := bufio.NewWriterSize(w, bufferSize)
 
+	predicate = CombineFilters(predicate, FilterOutVirtualGcsFolders)
+	readerIterator := gcsObjectIteratorToReaderIterator(ctx, bucket, it, predicate)
 	go func() {
 		for {
-			var or io.ReadCloser
-			objAttr, err := it.Next()
+			_, or, err := readerIterator()
 			if err == iterator.Done {
-				log.Printf("Iterator done")
 				bufferdWriter.Flush()
 				w.Close()
 				break
 			}
 			if err != nil {
-				w.CloseWithError(err)
+				_ = w.CloseWithError(err)
 				return
-			}
-			if !filter(objAttr) {
-				continue
-			}
-
-			// Is virtual folder?
-			// TODO: Maybe paramatrize "/"
-			if strings.HasSuffix(objAttr.Name, "/") && bytes.Equal(objAttr.MD5, placeholderMD5) {
-				continue
-			}
-
-			log.Printf("GotReader next file :%s\n", objAttr.Name)
-			or, err = bucket.Object(objAttr.Name).NewReader(ctx)
-			if err != nil {
-				w.CloseWithError(err)
-				return
-			}
-
-			if strings.HasSuffix(objAttr.Name, ".gz") {
-				//log.Printf("Decompressing next file :%s\n", objAttr.Name)
-				or, err = gzip.NewReader(or)
-				if err != nil {
-					r.CloseWithError(err)
-					return
-				}
 			}
 
 			//log.Printf("Copying data next file :%s\n", objAttr.Name)
 			if _, err = io.Copy(bufferdWriter, or); err != nil {
 				bufferdWriter.Flush()
-				w.CloseWithError(err)
+				_ = w.CloseWithError(err)
 				return
 			}
 
@@ -107,6 +82,56 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 	return r, nil
 }
 
+func FilterOutVirtualGcsFolders(objAttr *storage.ObjectAttrs) bool {
+	return !(strings.HasSuffix(objAttr.Name, "/") && bytes.Equal(objAttr.MD5, placeholderMD5))
+}
+
+func CombineFilters(filters ...func(*storage.ObjectAttrs) bool) func(*storage.ObjectAttrs) bool {
+	return func(o *storage.ObjectAttrs) bool {
+		for _, f := range filters {
+			if !f(o) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// gcsObjectIteratorToReaderIterator wraps common functionality
+func gcsObjectIteratorToReaderIterator(
+	ctx context.Context,
+	bucket *storage.BucketHandle,
+	it *storage.ObjectIterator,
+	predicate func(*storage.ObjectAttrs) bool,
+) func() (string, io.ReadCloser, error) {
+	var iterator func() (string, io.ReadCloser, error)
+	iterator = func() (string, io.ReadCloser, error) {
+		var or io.ReadCloser
+		objAttr, err := it.Next()
+		if err != nil {
+			return "", nil, err
+		}
+		if !predicate(objAttr) {
+			return iterator() //works as continue inside an interator
+		}
+
+		or, err = bucket.Object(objAttr.Name).NewReader(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+
+		if strings.HasSuffix(objAttr.Name, ".gz") {
+			or, err = gzip.NewReader(or)
+			if err != nil {
+				return "", nil, err
+			}
+		}
+
+		return objAttr.Name, or, nil
+	}
+	return iterator
+}
+
 // IterateJSONRecordsFilteredByPrefix returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
 // and that each file is saved in a sorted order)
 func IterateJSONRecordsFilteredByPrefix(
@@ -114,113 +139,63 @@ func IterateJSONRecordsFilteredByPrefix(
 	bucket *storage.BucketHandle,
 	prefix string,
 	new func() interface{},
-	filter func(*storage.ObjectAttrs) bool,
+	predicate func(*storage.ObjectAttrs) bool,
 ) (RecordIterator, error) {
 	// Deafult is to always keep everything
-	if filter == nil {
+	if predicate == nil {
 		return nil, fmt.Errorf("Must provide filter-function; To read everything use ReadAllByPrefix")
 	}
 
-	q := &storage.Query{
+	it := bucket.Objects(ctx, &storage.Query{
 		Delimiter: "",
 		Prefix:    prefix,
 		Versions:  false,
-	}
-	it := bucket.Objects(ctx, q)
-	log.Printf("Reading query: %#v", q)
+	})
 
-	// Let's not require the Lesser interface to be implemented.
-	var itSorter func(iterators []RecordIterator) (RecordIterator, error)
-	tmp := new()
-	if _, ok := tmp.(Lesser); ok {
-		itSorter = SortedRecordIterator
-	} else {
-		itSorter = func(iterators []RecordIterator) (RecordIterator, error) {
-			var f func() (interface{}, error)
-			f = func() (interface{}, error) {
-				if len(iterators) == 0 {
-					return nil, ErrIteratorStop
-				}
-				rec, err := iterators[0]()
-				if err == ErrIteratorStop {
-					iterators = iterators[1:]
-					return f()
-				}
-				return rec, err
-			}
-			return f, nil
-		}
-	}
+	predicate = CombineFilters(predicate, FilterOutVirtualGcsFolders)
+	readerIterator := gcsObjectIteratorToReaderIterator(ctx, bucket, it, predicate)
+	iteratorsByFolder := map[string][]RecordIterator{}
+	lastFolderName := ""
 
-	// Default iterator
-	currentFolderFileIterators := []RecordIterator{}
-	currentFolderIterator := func() (interface{}, error) {
-		return nil, ErrIteratorStop
-	}
+	// Create an interim null iterator to simplify our logic further down.
+	folderIterator := func() (interface{}, error) { return nil, ErrIteratorStop }
+
+	// Will yeild an interator combining all files inside a folder.
 	return func() (interface{}, error) {
-		rec, err := currentFolderIterator()
-		if err == nil {
-			return rec, err
-		}
-		if err != ErrIteratorStop {
+		if rec, err := folderIterator(); err == nil || err != ErrIteratorStop { // All good, or totaly bad?
 			return rec, err
 		}
 
-		previousFolder := ""
 		for {
-			var or io.ReadCloser
-			var err error
-			objAttr, err := it.Next()
-			if err == iterator.Done {
-				if len(currentFolderFileIterators) > 0 {
-					currentFolderIterator, err = itSorter(currentFolderFileIterators)
-					if err != nil {
-						return nil, err
-					}
-					currentFolderFileIterators = []RecordIterator{}
-					return currentFolderIterator()
-				} else {
-					return nil, ErrIteratorStop
-				}
-			}
+			fileName, reader, err := readerIterator()
 			if err != nil {
-				return nil, err
+				break
 			}
-			if !filter(objAttr) {
-				continue
+			folderName := fileName[:strings.LastIndex(fileName, "/")]
+			iteratorsByFolder[folderName] = append(iteratorsByFolder[folderName], JSONRecordIterator(new, reader))
+			if folderName != lastFolderName && lastFolderName != "" {
+				lastFolderName = folderName
+				break
 			}
-			// Is virtual folder?
-			// TODO: Maybe paramatrize "/"
-			if strings.HasSuffix(objAttr.Name, "/") && bytes.Equal(objAttr.MD5, placeholderMD5) {
-				continue
-			}
-
-			// Fetch a proper reader
-			or, err = bucket.Object(objAttr.Name).NewReader(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if strings.HasSuffix(objAttr.Name, ".gz") {
-				or, err = gzip.NewReader(or)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			// Cools; let's create an interator
-			currentFileIterator := JSONRecordIterator(new, or)
-
-			currentFolder := objAttr.Name[:strings.LastIndex(objAttr.Name, "/")]
-			if currentFolder == previousFolder || previousFolder == "" {
-				currentFolderFileIterators = append(currentFolderFileIterators, currentFileIterator)
-			} else {
-				currentFolderIterator, err = itSorter(currentFolderFileIterators)
-				if err != nil {
-					return nil, err
-				}
-				currentFolderFileIterators = []RecordIterator{currentFileIterator}
-				return currentFolderIterator()
-			}
+			lastFolderName = folderName
 		}
+		folderIterator = combineIteartors(iteratorsByFolder[lastFolderName])
+		return folderIterator()
 	}, nil
+}
+
+func combineIteartors(iterators []RecordIterator) RecordIterator {
+	var f func() (interface{}, error)
+	f = func() (interface{}, error) {
+		if len(iterators) == 0 {
+			return nil, ErrIteratorStop
+		}
+		rec, err := iterators[0]()
+		if err == ErrIteratorStop {
+			iterators = iterators[1:]
+			return f()
+		}
+		return rec, err
+	}
+	return f
 }
