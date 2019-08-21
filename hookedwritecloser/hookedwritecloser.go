@@ -6,6 +6,7 @@ import (
 	"sync"
 )
 
+// ErrAlreadyClosed is returned when any operation id done on a already closed entity
 var ErrAlreadyClosed = errors.New("writer is closed")
 
 // HookedWriteCloser adds the ability to get callbacks priror and after a close call.
@@ -41,12 +42,15 @@ func NewHookedWriteCloser(wc io.WriteCloser) *HookedWriteCloser {
 func (h *HookedWriteCloser) Close() error {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
+
 	if h.isClosed {
 		return ErrAlreadyClosed
 	}
+
 	for _, closer := range h.preCloseHooks {
 		closer()
 	}
+
 	res := h.WriteCloser.Close()
 	h.isClosed = true
 
@@ -62,16 +66,21 @@ func (h *HookedWriteCloser) Close() error {
 func (h *HookedWriteCloser) Write(p []byte) (int, error) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
+
 	if h.isClosed {
 		return 0, ErrAlreadyClosed
 	}
-	for _, writer := range h.preWriteHooks {
-		writer()
+
+	for _, hook := range h.preWriteHooks {
+		hook()
 	}
+
 	n, err := h.WriteCloser.Write(p)
-	for _, writer := range h.postWriteHooks {
-		writer(n, err)
+
+	for _, hook := range h.postWriteHooks {
+		hook(n, err)
 	}
+
 	return n, err
 }
 

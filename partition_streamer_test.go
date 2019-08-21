@@ -34,7 +34,7 @@ func TestMultiFileStreaming(t *testing.T) {
 
 		buffer := []byte{}
 		memDb[path] = buffer
-		return gcsext.NopeWriteCloserr{bytes.NewBuffer(buffer)}, nil
+		return gcsext.NopWriteCloser{bytes.NewBuffer(buffer)}, nil
 
 	}
 
@@ -84,8 +84,7 @@ func (r *testRecordWithPartition) GetPartions() (gcsext.KeyValues, error) {
 func (r *testRecordWithPartition) Lesss(other interface{}) bool {
 	if o, ok := other.(*testRecordWithPartition); ok {
 		return r.Var2 < o.Var2 // to get some variability
-	} else {
-		panic(other) //only for testing purposes, should never happen
 	}
-	return false
+
+	panic(other) //only for testing purposes, should never happen
 }

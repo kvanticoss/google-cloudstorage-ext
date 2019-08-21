@@ -17,11 +17,24 @@ type SortableStruct struct {
 func (s *SortableStruct) Less(other interface{}) bool {
 	otherss, ok := other.(*SortableStruct)
 	if !ok {
-		log.Printf("Type assertion failed in SortableStruct; got other part %#v", other)
+		log.Printf("Type assertion failed in SortableStruct; got other of type %#v", other)
 		return true
 	}
 	res := s.Val < otherss.Val
 	return res
+}
+
+func getRecordIterator(multiplier, max int) gcsext.RecordIterator {
+	i := 0
+	return func() (interface{}, error) {
+		i = i + 1
+		if i <= max {
+			return &SortableStruct{
+				Val: i * multiplier,
+			}, nil
+		}
+		return nil, gcsext.ErrIteratorStop
+	}
 }
 
 func TestSortedRecordIterator(t *testing.T) {
@@ -63,19 +76,6 @@ func TestSortedRecordIterator(t *testing.T) {
 
 	if lastVal == 0 {
 		t.Error("Record emitter didn't yeild any records")
-	}
-}
-
-func getRecordIterator(multiplier, max int) gcsext.RecordIterator {
-	i := 0
-	return func() (interface{}, error) {
-		i = i + 1
-		if i <= max {
-			return &SortableStruct{
-				Val: i * multiplier,
-			}, nil
-		}
-		return nil, gcsext.ErrIteratorStop
 	}
 }
 

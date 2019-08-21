@@ -10,12 +10,12 @@ type WriteCloser interface {
 	Close() error
 }
 
-// NopeWriteCloserr ads a NOP Close method to any writer.
-type NopeWriteCloserr struct {
+// NopWriteCloser ads a NOP Close method to any writer.
+type NopWriteCloser struct {
 	io.Writer
 }
 
 // Close is a NOP
-func (nc NopeWriteCloserr) Close() error {
+func (nc NopWriteCloser) Close() error {
 	return nil
 }

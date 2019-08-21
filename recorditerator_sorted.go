@@ -9,7 +9,7 @@ var (
 	ErrGotNilRecord = errors.New("record should not be nil (not comparable), return iterator stop instead")
 )
 
-type lesserIterator func() (Lesser, error)
+type LesserIterator func() (Lesser, error)
 
 // SortedRecordIterator combines a list of iterators; always yeilding the lowest value
 // available from all iterators. To do this it keeps a local "peak cache" of the next
@@ -17,11 +17,11 @@ type lesserIterator func() (Lesser, error)
 // sources (e.g time) might be experience unexpected results.
 func SortedRecordIterator(iterators []RecordIterator) (RecordIterator, error) {
 	var err error
-	lesserIterators := make([]lesserIterator, len(iterators))
+	LesserIterators := make([]LesserIterator, len(iterators))
 	nextCandidates := make([]Lesser, len(iterators))
 	for i, ri := range iterators {
-		lesserIterators[i] = toLesserIterator(ri)
-		nextCandidates[i], err = lesserIterators[i]()
+		LesserIterators[i] = toLesserIterator(ri)
+		nextCandidates[i], err = LesserIterators[i]()
 		if err != nil && err != ErrIteratorStop { // Stops are not errors
 			return nil, err
 		}
@@ -51,7 +51,7 @@ func SortedRecordIterator(iterators []RecordIterator) (RecordIterator, error) {
 			return nil, ErrIteratorStop
 		}
 
-		nextRecord, err := lesserIterators[bestIndex]()
+		nextRecord, err := LesserIterators[bestIndex]()
 		if err == ErrIteratorStop {
 			nextCandidates[bestIndex] = nil
 		} else if err != nil {
@@ -68,7 +68,7 @@ func SortedRecordIterator(iterators []RecordIterator) (RecordIterator, error) {
 	}, nil
 }
 
-func toLesserIterator(it RecordIterator) lesserIterator {
+func toLesserIterator(it RecordIterator) LesserIterator {
 	return func() (Lesser, error) {
 		record, err := it()
 		if err != nil {
@@ -107,7 +107,7 @@ func buildSortedRecordIterator(iterators ...RecordIterator) (RecordIterator, err
 	return buildSortedRecordIterator(res...)
 }
 
-func sortedRecordIterator(it1, it2 lesserIterator) (RecordIterator, error) {
+func sortedRecordIterator(it1, it2 LesserIterator) (RecordIterator, error) {
 	peakValue1, err1 := it1()
 	peakValue2, err2 := it2()
 	return func() (interface{}, error) {

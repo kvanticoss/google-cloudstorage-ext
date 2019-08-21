@@ -86,17 +86,6 @@ func FilterOutVirtualGcsFolders(objAttr *storage.ObjectAttrs) bool {
 	return !(strings.HasSuffix(objAttr.Name, "/") && bytes.Equal(objAttr.MD5, placeholderMD5))
 }
 
-func CombineFilters(filters ...func(*storage.ObjectAttrs) bool) func(*storage.ObjectAttrs) bool {
-	return func(o *storage.ObjectAttrs) bool {
-		for _, f := range filters {
-			if !f(o) {
-				return false
-			}
-		}
-		return true
-	}
-}
-
 // gcsObjectIteratorToReaderIterator wraps common functionality
 func gcsObjectIteratorToReaderIterator(
 	ctx context.Context,
@@ -133,7 +122,7 @@ func gcsObjectIteratorToReaderIterator(
 }
 
 // IterateJSONRecordsFilteredByPrefix returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
-// and that each file is saved in a sorted order)
+// and that each object in GCS folder is saved in a sorted order). Files between folders are not guarranteed to be sorted
 func IterateJSONRecordsFilteredByPrefix(
 	ctx context.Context,
 	bucket *storage.BucketHandle,
@@ -172,7 +161,14 @@ func IterateJSONRecordsFilteredByPrefix(
 				break
 			}
 			folderName := fileName[:strings.LastIndex(fileName, "/")]
-			iteratorsByFolder[folderName] = append(iteratorsByFolder[folderName], JSONRecordIterator(new, reader))
+			iteratorsByFolder[folderName] = append(
+				iteratorsByFolder[folderName],
+				NewBufferedRecordIteratorBTree(
+					toLesserIterator(
+						JSONRecordIterator(new, reader),
+					),
+					10000),
+			)
 			if folderName != lastFolderName && lastFolderName != "" {
 				lastFolderName = folderName
 				break
@@ -182,6 +178,18 @@ func IterateJSONRecordsFilteredByPrefix(
 		folderIterator = combineIteartors(iteratorsByFolder[lastFolderName])
 		return folderIterator()
 	}, nil
+}
+
+// CombineFilters creates an iterator-filter function by "AND"-ing all filters.
+func CombineFilters(filters ...func(*storage.ObjectAttrs) bool) func(*storage.ObjectAttrs) bool {
+	return func(o *storage.ObjectAttrs) bool {
+		for _, f := range filters {
+			if !f(o) {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 func combineIteartors(iterators []RecordIterator) RecordIterator {
