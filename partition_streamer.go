@@ -2,21 +2,24 @@ package gcsext
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/btree"
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/kvanticoss/google-cloudstorage-ext/gzip"
 )
 
-const maxTreeSize = 500
+var ErrInvalidRecord = errors.New("record must be non nil and comparable (implement lesser interface)")
+var ErrTooManyPartitions = errors.New("can not write new record, would create too many partions in the cache")
+
+const maxTreeSize = 5000
 const maxOpenPartitions = 150
+
+var recordDelimiter = []byte("\n")
 
 // StreamJSONRecords reads records from a recordIterator and writes them to the WriterFactory provided writers
 // Any record that provides GetPartions() method will have their partions expanded to the path.
@@ -47,7 +50,7 @@ func StreamJSONRecords(
 	ri RecordIterator,
 	bucketTTL time.Duration,
 ) (err error) {
-	rs, err := NewRecordsStreamer(ctx, WriterFactory, bucketTTL)
+	rs, err := NewRecordsStreamer(ctx, WriterFactory, bucketTTL, 150)
 	if err != nil {
 		return err
 	}
@@ -61,24 +64,23 @@ func StreamJSONRecords(
 	return err
 }
 
-type btreesWithTs struct {
-	*btree.BTree
-	lastTs time.Time
-}
-
 // JSONRecordStreamer provides partitioned writing of records to a store
 type JSONRecordStreamer struct {
+	ctx context.Context
 	mwc *MultiWriterCache
 
-	clusters     map[string][]*btreesWithTs
+	partitions   map[string]*SortedRecordWriter
 	clusterMutex sync.Mutex
+
+	ttl           time.Duration
+	maxPartitions int
 
 	hostName string
 }
 
 // NewRecordsStreamer creates an Json Record writer. It will write each record to a hadoop partitioned path (if the record implements GetPartitions()).
 // All data will be gzip:ed before written to the WriterFactory-provided Writer.
-func NewRecordsStreamer(ctx context.Context, WriterFactory func(path string) (WriteCloser, error), ttl time.Duration) (rs *JSONRecordStreamer, err error) {
+func NewRecordsStreamer(ctx context.Context, WriterFactory func(path string) (WriteCloser, error), ttl time.Duration, maxPartitions int) (rs *JSONRecordStreamer, err error) {
 	host, err := os.Hostname()
 	if err != nil {
 		return nil, err
@@ -93,10 +95,14 @@ func NewRecordsStreamer(ctx context.Context, WriterFactory func(path string) (Wr
 	}
 
 	return &JSONRecordStreamer{
+		ctx: ctx,
 		mwc: NewMultiWriterCache(ctx, gzipWriterFactory, ttl),
 
-		clusters:     make(map[string][]*btreesWithTs),
+		partitions:   make(map[string]*SortedRecordWriter),
 		clusterMutex: sync.Mutex{},
+
+		ttl:           ttl,
+		maxPartitions: maxPartitions,
 
 		hostName: host,
 	}, nil
@@ -107,21 +113,18 @@ func (rs *JSONRecordStreamer) Close() error {
 	rs.clusterMutex.Lock()
 	defer rs.clusterMutex.Unlock()
 
-	var allErrors MultiError
-	for path, trees := range rs.clusters {
-		for index, tree := range trees {
-			log.Printf("Closing tree with %d items @ %s", tree.Len(), path)
-			for tree.Len() > 0 {
-				path2 := strings.ReplaceAll(path, "{clusterId}", strconv.Itoa(index))
-				if err := rs.writeRecord(path2, tree.DeleteMin()); err != nil {
-					allErrors = append(allErrors, err)
-				}
-			}
-		}
+	for partitionPath, sortedPartition := range rs.partitions {
+		log.Printf("Closing sorted partition @ %s", partitionPath)
+		sortedPartition.Close()
 	}
+
+	var allErrors MultiError
+	log.Printf("Closing MWC")
 	if err := rs.mwc.Close(); err != nil {
 		allErrors = append(allErrors, err)
 	}
+	log.Printf("Done closing MWC")
+
 	return allErrors.MaybeError()
 }
 
@@ -132,42 +135,56 @@ func (rs *JSONRecordStreamer) Close() error {
 //
 // Writing a nil-record will return a nil-error but have no effect
 func (rs *JSONRecordStreamer) WriteRecord(record interface{}) error {
-
 	if record == nil {
-		return nil
+		return ErrInvalidRecord
 	}
 
-	maybePartitions := ""
-	if recordPartitioner, ok := record.(PartitionGetter); ok {
-		maybeParts, err := recordPartitioner.GetPartions()
-		if err != nil {
-			return err
+	maybePartitions := rs.maybePartitions(record)
+
+	recAsLesser, recIsComparable := record.(Lesser)
+	if !recIsComparable {
+		rs.writeRecord(maybePartitions+"data_"+rs.hostName+"_"+"b0_{suffix}", record)
+	}
+
+	SRW, err := rs.getSertSortedWriter(maybePartitions)
+	if err != nil {
+		return err
+	}
+	return SRW.WriteRecord(recAsLesser)
+}
+
+func (rs *JSONRecordStreamer) reducePartitions() error {
+	// TODO: Add reduction strategies (like close LRU, or random)
+	return ErrTooManyPartitions
+}
+
+func (rs *JSONRecordStreamer) getSertSortedWriter(partition string) (*SortedRecordWriter, error) {
+	SRW, exists := rs.partitions[partition]
+	if !exists {
+
+		if len(rs.partitions) > rs.maxPartitions {
+			if err := rs.reducePartitions(); err != nil {
+				return nil, err
+			}
 		}
-		maybePartitions = maybeParts.ToPartitionKey() + "/"
+
+		log.Printf("Creating INITIAL sortTree for path %s", partition)
+		SRW = NewSortedRecordWriter(rs.ctx, func(bucketID string, record Lesser) {
+			path := partition + "data_" + rs.hostName + "_" + "b" + bucketID + "_{suffix}"
+			err := rs.writeRecord(path, record)
+			if err != nil {
+				panic(err)
+			}
+		}, WithMaxCacheIdleTime(rs.ttl))
+
+		rs.partitions[partition] = SRW
 	}
-
-	// within each cluster, all records must come in sorted order; which cluster should this record be appended to?
-	path := maybePartitions + "data_" + rs.hostName + "_" + "{clusterId}_{suffix}.json"
-	isSortable, asLesser, clusterId, tree := rs.findOptimalCluster(path, record)
-
-	if !isSortable {
-		return rs.writeRecord(path, record)
-	}
-
-	tree.ReplaceOrInsert(btreeLesser{asLesser})
-	if tree.Len() > maxTreeSize {
-		return rs.writeRecord(strings.ReplaceAll(path, "{clusterId}", clusterId), tree.DeleteMin())
-	}
-
-	return nil
+	return SRW, nil
 }
 
 func (rs *JSONRecordStreamer) writeRecord(path string, record interface{}) error {
-	recordDelimiter := []byte("\n")
-
-	// Expected case
 	if record == nil {
-		return nil
+		return ErrInvalidRecord
 	}
 
 	if btl, ok := record.(btreeLesser); ok {
@@ -178,90 +195,17 @@ func (rs *JSONRecordStreamer) writeRecord(path string, record interface{}) error
 	if err != nil {
 		return err
 	}
-	_, err = rs.mwc.Write(path, append(d, recordDelimiter...))
+	_, err = rs.mwc.Write(path+".json", append(d, recordDelimiter...))
 	return err
 }
 
-func (rs *JSONRecordStreamer) closeLRU() {
-	rs.clusterMutex.Lock()
-	defer rs.clusterMutex.Unlock()
-
-	now := time.Now()
-	oldestTs := now
-	oldestPath := ""
-	oldestIndex := 0
-
-	for path, trees := range rs.clusters {
-		for index, tree := range trees {
-			if tree.lastTs.Before(oldestTs) {
-				oldestPath = path
-				oldestTs = tree.lastTs
-				oldestIndex = index
-			}
+func (rs *JSONRecordStreamer) maybePartitions(record interface{}) string {
+	if recordPartitioner, ok := record.(PartitionGetter); ok {
+		maybeParts, err := recordPartitioner.GetPartions()
+		if err != nil {
+			return ""
 		}
+		return maybeParts.ToPartitionKey() + "/"
 	}
-
-	if oldestTs != now {
-		log.Printf("Closing old/LRU partitions @ %s:%d", oldestPath, oldestIndex)
-		tree := rs.clusters[oldestPath][oldestIndex]
-		for tree.Len() > 0 {
-			path2 := strings.ReplaceAll(oldestPath, "{clusterId}", strconv.Itoa(oldestIndex))
-			_ = rs.writeRecord(path2, tree.DeleteMin())
-		}
-		if oldestIndex > 0 {
-			rs.clusters[oldestPath] = rs.clusters[oldestPath][oldestIndex:]
-		} else {
-			delete(rs.clusters, oldestPath)
-		}
-	}
-
-}
-
-func (rs *JSONRecordStreamer) findOptimalCluster(
-	path string,
-	record interface{},
-) (
-	isSortable bool,
-	recAsLesser Lesser,
-	clusterID string,
-	clusterTree *btreesWithTs,
-) {
-	rs.clusterMutex.Lock()
-	defer func() {
-		// TODO: Better pruning method.
-		if len(rs.clusters) > maxOpenPartitions {
-			go rs.closeLRU()
-		}
-	}()
-	defer rs.clusterMutex.Unlock()
-
-	clusterID = "0"
-	recAsLesser, isSortable = record.(Lesser)
-	if !isSortable {
-		return isSortable, recAsLesser, clusterID, nil
-	}
-
-	_, exists := rs.clusters[path]
-	if !exists {
-		log.Printf("Creating INITIAL sortTree for path %s", path)
-		rs.clusters[path] = append(rs.clusters[path], &btreesWithTs{btree.New(16), time.Now()})
-	}
-
-	// See which is the first cluster this record can be appended to (and still be in sorted order)
-	for index, tree := range rs.clusters[path] {
-		leastVal := tree.Min()
-		if leastVal == nil || tree.Len() < (maxTreeSize-2) || !leastVal.Less(btreeLesser{recAsLesser}) { // If it is not less than the smallest value in the tree, or it is empty => we're good
-			if leastVal != nil {
-				tree.lastTs = time.Now()
-			}
-			return isSortable, recAsLesser, strconv.Itoa(index), tree
-		}
-	}
-
-	// Otherwise we need a new tree
-	log.Printf("Creating Additional sortTree for path %s (index: %d)", path, len(rs.clusters[path]))
-
-	rs.clusters[path] = append(rs.clusters[path], &btreesWithTs{btree.New(16), time.Now()})
-
-	return isSortable, recAsLesser, strconv.Itoa(len(rs.clusters[path])), rs.clusters[path][len(rs.clusters[path])-1]
+	return ""
 }
