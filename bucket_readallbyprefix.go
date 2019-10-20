@@ -8,7 +8,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/kvanticoss/google-cloudstorage-ext/gzip"
+	"github.com/kvanticoss/goutils/gzip"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/net/context"
@@ -82,6 +82,7 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 	return r, nil
 }
 
+// FilterOutVirtualGcsFolders is a predicate function which removes the GCS virtual folders by requiring the name to end with "/" and the hash to match "placeholder" content
 func FilterOutVirtualGcsFolders(objAttr *storage.ObjectAttrs) bool {
 	return !(strings.HasSuffix(objAttr.Name, "/") && bytes.Equal(objAttr.MD5, placeholderMD5))
 }
@@ -163,11 +164,7 @@ func IterateJSONRecordsFilteredByPrefix(
 			folderName := fileName[:strings.LastIndex(fileName, "/")]
 			iteratorsByFolder[folderName] = append(
 				iteratorsByFolder[folderName],
-				NewBufferedRecordIteratorBTree(
-					toLesserIterator(
-						JSONRecordIterator(new, reader),
-					),
-					10000),
+				JSONRecordIterator(new, reader),
 			)
 			if folderName != lastFolderName && lastFolderName != "" {
 				lastFolderName = folderName
