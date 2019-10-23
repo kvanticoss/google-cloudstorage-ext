@@ -13,10 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const (
-	baseBucket = "kvantic-public"
-)
-
 func TestSimpleRead(t *testing.T) {
 	assert := assert.New(t)
 

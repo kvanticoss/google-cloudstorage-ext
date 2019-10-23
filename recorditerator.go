@@ -1,13 +1,10 @@
 package gcsext
 
-import "fmt"
+import (
+	"github.com/kvanticoss/goutils/iterator"
+)
 
 var (
 	// ErrIteratorStop is returned by RecordIterators where there are not more records to be found.
-	ErrIteratorStop = fmt.Errorf("iterator stop")
+	ErrIteratorStop = iterator.ErrIteratorStop
 )
-
-// RecordIterator is a function which yeild any golang data struct each time called
-// Where there are no more records; ErrIteratorStop should be returned and should not
-// be treated as an error (compare to io.EOF)
-type RecordIterator func() (interface{}, error)

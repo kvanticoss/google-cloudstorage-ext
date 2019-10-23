@@ -23,6 +23,7 @@ func TestTouch(t *testing.T) {
 	}
 	bucket := client.Bucket(baseBucket)
 
+	// Won't work if too many users run this test concurrently; fine for now.
 	path := fmt.Sprintf("artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_touch/%d", time.Now().Unix())
 
 	r, err := gcsext.TouchFile(ctx, bucket, path)
