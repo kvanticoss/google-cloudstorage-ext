@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
+	"path"
 	"strings"
 
 	"github.com/kvanticoss/goutils/gzip"
+	"github.com/kvanticoss/goutils/iterator"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/net/context"
@@ -37,12 +38,11 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 		Versions:  false,
 	}
 	it := bucket.Objects(ctx, q)
-	log.Printf("Reading query: %#v", q)
 
 	r, w := io.Pipe()
 	bufferdWriter := bufio.NewWriterSize(w, bufferSize)
 
-	predicate = CombineFilters(predicate, FilterOutVirtualGcsFolders)
+	predicate = CombineFilters(FilterOutVirtualGcsFolders, predicate)
 	readerIterator := gcsObjectIteratorToReaderIterator(ctx, bucket, it, predicate)
 	go func() {
 		for {
@@ -70,6 +70,94 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 	}()
 
 	return r, nil
+}
+
+// ReadFoldersFilteredByPrefix Reads all files one into 1 combined bytestream per folder, autoamtically handles decompression of .gz
+// only objects that predicate(*storage.ObjectAttrs) bool returns true will be kept First error will close the stream.
+func ReadFoldersFilteredByPrefix(
+	ctx context.Context,
+	bucket *storage.BucketHandle,
+	prefix string,
+	predicate func(*storage.ObjectAttrs) bool,
+) (
+	func() (string, io.ReadCloser, error),
+	error,
+) {
+	q := &storage.Query{
+		Delimiter: "",
+		Prefix:    prefix,
+		Versions:  false,
+	}
+	it := bucket.Objects(ctx, q)
+	predicate = CombineFilters(predicate, FilterOutVirtualGcsFolders)
+	readerIterator := gcsObjectIteratorToReaderIterator(ctx, bucket, it, predicate)
+
+	type resTuple struct {
+		folder string
+		r      io.ReadCloser
+	}
+	nextFolder := make(chan *resTuple)
+
+	go func() {
+		lastFolderName := ""
+		var r io.ReadCloser
+		var bw *bufio.Writer
+		var w *io.PipeWriter
+
+		closeWriters := func(err error) {
+			if bw != nil {
+				bw.Flush()
+			}
+			if w != nil {
+				_ = w.CloseWithError(err)
+			}
+			if err != nil {
+				close(nextFolder)
+			}
+		}
+
+		for {
+			fileName, or, err := readerIterator()
+			if err == googleIterator.Done {
+				closeWriters(nil) // regular EOF for this folder
+				close(nextFolder) // but the iterator needs to know there's nothing more
+				return
+			}
+			if err != nil {
+				closeWriters(err)
+				return
+			}
+
+			currentFolder := path.Dir(fileName)
+			if currentFolder != lastFolderName {
+				if w != nil {
+					closeWriters(nil)
+				}
+				r, bw, w = newBufferedPipe()
+				nextFolder <- &resTuple{currentFolder, r}
+				lastFolderName = currentFolder
+			}
+
+			_, err = io.Copy(bw, or)
+			if err != nil {
+				closeWriters(err)
+				return
+			}
+		}
+	}()
+
+	// Folter iterator
+	return func() (string, io.ReadCloser, error) {
+		select {
+		case r := <-nextFolder:
+			if r == nil {
+				return "", nil, iterator.ErrIteratorStop
+			}
+			return r.folder, r.r, nil
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		}
+	}, nil
 }
 
 // gcsObjectIteratorToReaderIterator wraps common functionality
@@ -105,4 +193,10 @@ func gcsObjectIteratorToReaderIterator(
 		return objAttr.Name, or, nil
 	}
 	return iterator
+}
+
+func newBufferedPipe() (io.ReadCloser, *bufio.Writer, *io.PipeWriter) {
+	r, w := io.Pipe()
+	bufferdWriter := bufio.NewWriterSize(w, bufferSize)
+	return r, bufferdWriter, w
 }

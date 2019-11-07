@@ -52,3 +52,37 @@ func TestSimpleRead(t *testing.T) {
 		assert.Equal(t.expected, string(b), "Test number %d - %s", index, t.path)
 	}
 }
+
+func TestReadFoldersFilteredByPrefix(t *testing.T) {
+	assert := assert.New(t)
+
+	ctx := context.Background()
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket := client.Bucket(baseBucket)
+
+	it, err := gcsext.ReadFoldersFilteredByPrefix(ctx, bucket, "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_", nil)
+	assert.NoError(err, "couldn't get folderIterator from ReadFoldersFilteredByPrefix")
+
+	expections := map[string]string{
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_readplaintext": "A\nB\nC\n",
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_readgzip":      "A\nB\nC\n",
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_mixed":         "A\nA\nB\nC\n",
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_mixedempty":    "A\nB\nC\nA\nB\nC\n",
+	}
+
+	for folder, reader, err := it(); err == nil; folder, reader, err = it() {
+		//t.Log(folder)
+		b, err := ioutil.ReadAll(reader)
+		assert.NoError(err, "failed to read stuff")
+
+		if expected, ok := expections[folder]; ok {
+			assert.Equal(expected, string(b), "content doesn't match expectations")
+			delete(expections, folder)
+		}
+	}
+	assert.Empty(expections, "Expected to iterate through all test-cases")
+
+}
