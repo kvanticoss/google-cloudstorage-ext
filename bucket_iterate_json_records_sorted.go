@@ -1,7 +1,8 @@
 package gcsext
-
+/*
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/kvanticoss/goutils/iterator"
@@ -12,6 +13,7 @@ import (
 
 // IterateJSONRecordsFilteredByPrefix returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
 // and that each object in GCS folder is saved in a sorted order). Files between folders are not guarranteed to be sorted
+
 func IterateJSONRecordsFilteredByPrefix(
 	ctx context.Context,
 	bucket *storage.BucketHandle,
@@ -41,7 +43,7 @@ func IterateJSONRecordsFilteredByPrefix(
 	folderIterator := func() (interface{}, error) { return nil, iterator.ErrIteratorStop }
 
 	// Will yeild an interator combining all files inside a folder.
-	return func() (interface{}, error) {
+	f := func() (interface{}, error) {
 		if rec, err := folderIterator(); err == nil || err != iterator.ErrIteratorStop { // Not an error; OR any error other than the one we can handle (IteratorStop)
 			return rec, err
 		}
@@ -67,5 +69,13 @@ func IterateJSONRecordsFilteredByPrefix(
 			return nil, err
 		}
 		return folderIterator()
+	}
+
+	return func() (interface{}, error) {
+		rec, err := f()
+		log.Println("\n\nRECORDS %v; %v", rec, err)
+		return rec, err
 	}, nil
 }
+
+*/
