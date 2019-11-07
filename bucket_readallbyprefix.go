@@ -72,9 +72,9 @@ func ReadFilteredByPrefix(ctx context.Context, bucket *storage.BucketHandle, pre
 	return r, nil
 }
 
-// ReadFoldersFilteredByPrefix Reads all files one into 1 combined bytestream per folder, autoamtically handles decompression of .gz
+// ReadFoldersByPrefixWithFilter Reads all files one into 1 combined bytestream per folder, autoamtically handles decompression of .gz
 // only objects that predicate(*storage.ObjectAttrs) bool returns true will be kept First error will close the stream.
-func ReadFoldersFilteredByPrefix(
+func ReadFoldersByPrefixWithFilter(
 	ctx context.Context,
 	bucket *storage.BucketHandle,
 	prefix string,

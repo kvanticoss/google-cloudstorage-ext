@@ -63,8 +63,8 @@ func TestReadFoldersFilteredByPrefix(t *testing.T) {
 	}
 	bucket := client.Bucket(baseBucket)
 
-	it, err := gcsext.ReadFoldersFilteredByPrefix(ctx, bucket, "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_", nil)
-	assert.NoError(err, "couldn't get folderIterator from ReadFoldersFilteredByPrefix")
+	it, err := gcsext.ReadFoldersByPrefixWithFilter(ctx, bucket, "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_", nil)
+	assert.NoError(err, "couldn't get folderIterator from ReadFoldersByPrefixWithFilter")
 
 	expections := map[string]string{
 		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_readplaintext": "A\nB\nC\n",
