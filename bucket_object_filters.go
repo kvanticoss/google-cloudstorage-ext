@@ -16,6 +16,9 @@ func FilterOutVirtualGcsFolders(objAttr *storage.ObjectAttrs) bool {
 func CombineFilters(filters ...func(*storage.ObjectAttrs) bool) func(*storage.ObjectAttrs) bool {
 	return func(o *storage.ObjectAttrs) bool {
 		for _, f := range filters {
+			if f == nil {
+				continue
+			}
 			if !f(o) {
 				return false
 			}
