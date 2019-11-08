@@ -79,10 +79,7 @@ func ReadFoldersByPrefixWithFilter(
 	bucket *storage.BucketHandle,
 	prefix string,
 	predicate func(*storage.ObjectAttrs) bool,
-) (
-	func() (string, io.ReadCloser, error),
-	error,
-) {
+) func() (string, io.ReadCloser, error) {
 	q := &storage.Query{
 		Delimiter: "",
 		Prefix:    prefix,
@@ -157,7 +154,62 @@ func ReadFoldersByPrefixWithFilter(
 		case <-ctx.Done():
 			return "", nil, ctx.Err()
 		}
-	}, nil
+	}
+}
+
+// FolderReadersByPrefixWithFilter returns an interator which in turn returns (potentially uncompressed gzip) readers for each unique folder found under the prefix
+func FolderReadersByPrefixWithFilter(
+	ctx context.Context,
+	bucket *storage.BucketHandle,
+	prefix string,
+	predicate func(*storage.ObjectAttrs) bool,
+) func() (string, []io.ReadCloser, error) {
+	q := &storage.Query{
+		Delimiter: "",
+		Prefix:    prefix,
+		Versions:  false,
+	}
+	it := bucket.Objects(ctx, q)
+	predicate = CombineFilters(predicate, FilterOutVirtualGcsFolders)
+	readerIterator := gcsObjectIteratorToReaderIterator(ctx, bucket, it, predicate)
+
+	var lastFolderName string
+	var previousBatch []io.ReadCloser
+
+	fetchFolderBatch := func() (folder string, res []io.ReadCloser, err error) {
+		res = previousBatch
+		for {
+			fileName, or, err2 := readerIterator()
+			if err2 == googleIterator.Done {
+				return lastFolderName, res, iterator.ErrIteratorStop
+			}
+			if err2 != nil {
+				return lastFolderName, res, err2
+			}
+
+			currentFolder := path.Dir(fileName)
+			if currentFolder != lastFolderName && lastFolderName != "" {
+				// anonoumous returns are uggly but here they kinda work well
+				previousBatch = []io.ReadCloser{or}
+				folder = lastFolderName
+				err = nil
+				lastFolderName = currentFolder // save for next iteration
+				return
+			}
+
+			lastFolderName = currentFolder
+			res = append(res, or)
+		}
+	}
+
+	// Folter iterator
+	return func() (string, []io.ReadCloser, error) {
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+
+		return fetchFolderBatch()
+	}
 }
 
 // gcsObjectIteratorToReaderIterator wraps common functionality

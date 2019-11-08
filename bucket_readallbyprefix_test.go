@@ -3,6 +3,7 @@ package gcsext_test
 
 import (
 	"context"
+	"io"
 	"io/ioutil"
 	"log"
 	"testing"
@@ -63,8 +64,7 @@ func TestReadFoldersFilteredByPrefix(t *testing.T) {
 	}
 	bucket := client.Bucket(baseBucket)
 
-	it, err := gcsext.ReadFoldersByPrefixWithFilter(ctx, bucket, "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_", nil)
-	assert.NoError(err, "couldn't get folderIterator from ReadFoldersByPrefixWithFilter")
+	it := gcsext.ReadFoldersByPrefixWithFilter(ctx, bucket, "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_", nil)
 
 	expections := map[string]string{
 		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_readplaintext": "A\nB\nC\n",
@@ -80,6 +80,61 @@ func TestReadFoldersFilteredByPrefix(t *testing.T) {
 
 		if expected, ok := expections[folder]; ok {
 			assert.Equal(expected, string(b), "content doesn't match expectations")
+			delete(expections, folder)
+		}
+	}
+	assert.Empty(expections, "Expected to iterate through all test-cases")
+
+}
+
+func TestFolderReadersByPrefixWithFilter(t *testing.T) {
+	assert := assert.New(t)
+
+	ctx := context.Background()
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket := client.Bucket(baseBucket)
+
+	it := gcsext.FolderReadersByPrefixWithFilter(ctx, bucket, "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_", nil)
+
+	expections := map[string]struct {
+		files   int
+		content string
+	}{
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_readplaintext": {
+			files:   3,
+			content: "A\nB\nC\n",
+		},
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_readgzip": {
+			files:   1,
+			content: "A\nB\nC\n",
+		},
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_mixed": {
+			files:   2,
+			content: "A\nA\nB\nC\n",
+		},
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_mixedempty": {
+			files:   4,
+			content: "A\nB\nC\nA\nB\nC\n",
+		},
+	}
+
+	for folder, readers, err := it(); err == nil; folder, readers, err = it() {
+
+		if expected, ok := expections[folder]; ok {
+			assert.Len(readers, expected.files, "wrong number of readers(files) in folder")
+
+			asReader := make([]io.Reader, len(readers))
+			for index, readCloser := range readers {
+				asReader[index] = readCloser
+			}
+
+			b, err := ioutil.ReadAll(io.MultiReader(asReader...))
+			assert.NoError(err, "failed to read stuff")
+
+			assert.Equal(expected.content, string(b), "content doesn't match expectations")
 			delete(expections, folder)
 		}
 	}
