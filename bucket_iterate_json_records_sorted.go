@@ -1,81 +1,57 @@
 package gcsext
-/*
-import (
-	"fmt"
-	"log"
-	"strings"
 
+import (
 	"github.com/kvanticoss/goutils/iterator"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/net/context"
 )
 
-// IterateJSONRecordsFilteredByPrefix returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
-// and that each object in GCS folder is saved in a sorted order). Files between folders are not guarranteed to be sorted
-
-func IterateJSONRecordsFilteredByPrefix(
+// IterateJSONRecordByFoldersSorted returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
+// and that each object in the GCS folder is saved in a sorted order). Files between folders are not guarranteed to be sorted as folders are read sequencially
+func IterateJSONRecordByFoldersSorted(
 	ctx context.Context,
 	bucket *storage.BucketHandle,
 	prefix string,
 	new func() interface{},
 	predicate func(*storage.ObjectAttrs) bool,
-) (iterator.RecordIterator, error) {
-	// Deafult is to always keep everything
-	if predicate == nil {
-		return nil, fmt.Errorf("Must provide filter-function; To read everything use ReadAllByPrefix")
-	}
+) func() (string, interface{}, error) {
 
-	it := bucket.Objects(ctx, &storage.Query{
-		Delimiter: "",
-		Prefix:    prefix,
-		Versions:  false,
-	})
-
-	predicate = CombineFilters(predicate, FilterOutVirtualGcsFolders)
-	readerIterator := gcsObjectIteratorToReaderIterator(ctx, bucket, it, predicate)
-
-	iteratorsByFolder := map[string][]iterator.RecordIterator{}
-	lastFolderName := ""
-
-	var err error
-	// Create an interim null iterator to simplify our logic further down.
-	folderIterator := func() (interface{}, error) { return nil, iterator.ErrIteratorStop }
-
-	// Will yeild an interator combining all files inside a folder.
-	f := func() (interface{}, error) {
-		if rec, err := folderIterator(); err == nil || err != iterator.ErrIteratorStop { // Not an error; OR any error other than the one we can handle (IteratorStop)
-			return rec, err
-		}
-
-		for {
-			fileName, reader, err := readerIterator()
-			if err != nil {
-				break
-			}
-			folderName := fileName[:strings.LastIndex(fileName, "/")]
-			iteratorsByFolder[folderName] = append(
-				iteratorsByFolder[folderName],
-				iterator.JSONRecordIterator(new, reader),
-			)
-			if folderName != lastFolderName && lastFolderName != "" {
-				lastFolderName = folderName
-				break
-			}
-			lastFolderName = folderName
-		}
-		folderIterator, err = iterator.SortedRecordIterators(iteratorsByFolder[lastFolderName])
+	// Folder iterator. Will yeild readers for all elements in the folder
+	folderIt := FolderReadersByPrefixWithFilter(ctx, bucket, prefix, predicate)
+	fetchNextSortedFolderIt := func() (string, iterator.RecordIterator, error) {
+		folder, readers, err := folderIt()
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
-		return folderIterator()
+		iterators := make([]iterator.RecordIterator, len(readers))
+		for index, reader := range readers {
+			iterators[index] = iterator.JSONRecordIterator(new, reader)
+		}
+		it, err := iterator.SortedRecordIterators(iterators)
+		return folder, it, err
 	}
 
-	return func() (interface{}, error) {
-		rec, err := f()
-		log.Println("\n\nRECORDS %v; %v", rec, err)
-		return rec, err
-	}, nil
-}
+	var currentFolderIterator iterator.RecordIterator
+	var err error
+	var lastRecord interface{}
+	var lastFolder string
+	return func() (string, interface{}, error) {
+		if currentFolderIterator == nil && err == nil {
+			lastFolder, currentFolderIterator, err = fetchNextSortedFolderIt()
+			if err != nil {
+				return lastFolder, nil, err
+			}
+		}
+		lastRecord, err = currentFolderIterator()
+		if err == iterator.ErrIteratorStop {
+			lastFolder, currentFolderIterator, err = fetchNextSortedFolderIt()
+			if err != nil {
+				return lastFolder, nil, err
+			}
+			lastRecord, err = currentFolderIterator()
+		}
 
-*/
+		return lastFolder, lastRecord, err
+	}
+}
