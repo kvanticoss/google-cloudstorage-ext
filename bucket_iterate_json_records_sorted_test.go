@@ -32,7 +32,7 @@ func TestIterateJSONRecordByFolderSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	it := gcsext.IterateJSONRecordByFoldersSorted(
+	it := gcsext.IterateJSONRecordsByFoldersSorted(
 		ctx,
 		client.Bucket(baseBucket),
 		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_partition_streamer/",

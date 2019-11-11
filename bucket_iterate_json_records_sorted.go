@@ -7,9 +7,9 @@ import (
 	"golang.org/x/net/context"
 )
 
-// IterateJSONRecordByFoldersSorted returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
+// IterateJSONRecordsByFoldersSorted returns a RecordIterator with the guarratee that records will come in sorted order (assumes the record implements the Lesser interface
 // and that each object in the GCS folder is saved in a sorted order). Files between folders are not guarranteed to be sorted as folders are read sequencially
-func IterateJSONRecordByFoldersSorted(
+func IterateJSONRecordsByFoldersSorted(
 	ctx context.Context,
 	bucket *storage.BucketHandle,
 	prefix string,
