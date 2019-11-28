@@ -40,18 +40,61 @@ func IterateJSONRecordsByFoldersSorted(
 		if currentFolderIterator == nil && err == nil {
 			lastFolder, currentFolderIterator, err = fetchNextSortedFolderIt()
 			if err != nil {
-				return lastFolder, nil, err
+				return "", nil, err
 			}
 		}
+
 		lastRecord, err = currentFolderIterator()
-		if err == iterator.ErrIteratorStop {
-			lastFolder, currentFolderIterator, err = fetchNextSortedFolderIt()
-			if err != nil {
-				return lastFolder, nil, err
+		for err == iterator.ErrIteratorStop {
+			if lastFolder, currentFolderIterator, err = fetchNextSortedFolderIt(); err != nil {
+				return "", nil, err
 			}
 			lastRecord, err = currentFolderIterator()
 		}
 
 		return lastFolder, lastRecord, err
 	}
+}
+
+// IterateJSONRecordsByFoldersSortedCB works like IterateJSONRecordsByFoldersSorted but through an callback pattern
+func IterateJSONRecordsByFoldersSortedCB(
+	ctx context.Context,
+	bucket *storage.BucketHandle,
+	prefix string,
+	new func() interface{},
+	predicate func(*storage.ObjectAttrs) bool,
+	callback func(string, func() (interface{}, error)) error,
+) error {
+	it := IterateJSONRecordsByFoldersSorted(ctx, bucket, prefix, new, predicate)
+
+	nextFolder := ""
+	previousFolder, previousRecord, err := it()
+	if err != nil {
+		return err
+	}
+
+	for err == nil {
+		err = callback(previousFolder, func() (interface{}, error) {
+			if nextFolder != previousFolder && nextFolder != "" {
+				err = iterator.ErrIteratorStop
+				return nil, err
+			}
+			defer func() {
+				// Only fetch next if we are clear of errors
+				if err == nil {
+					nextFolder, previousRecord, err = it()
+				}
+			}()
+			return previousRecord, err
+		})
+		if err != nil && err != iterator.ErrIteratorStop {
+			return err
+		}
+		if nextFolder == "" {
+			return err
+		}
+		previousFolder = nextFolder
+		err = nil
+	}
+	return err
 }

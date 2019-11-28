@@ -180,11 +180,16 @@ func FolderReadersByPrefixWithFilter(
 		res = previousBatch
 		for {
 			fileName, or, err2 := readerIterator()
+			// Ensure to flush the previous batch of elements we got.
+			if err2 != nil && previousBatch != nil {
+				previousBatch = nil
+				return lastFolderName, res, nil
+			}
 			if err2 == googleIterator.Done {
-				return lastFolderName, res, iterator.ErrIteratorStop
+				return "", nil, iterator.ErrIteratorStop
 			}
 			if err2 != nil {
-				return lastFolderName, res, err2
+				return "", nil, err2
 			}
 
 			currentFolder := path.Dir(fileName)

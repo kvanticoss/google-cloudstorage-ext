@@ -54,3 +54,36 @@ func TestIterateJSONRecordByFolderSorted(t *testing.T) {
 		prevRec = rec
 	}
 }
+
+func TestIterateJSONRecordByFolderSortedCB(t *testing.T) {
+	assert := assert.New(t)
+
+	ctx := context.Background()
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prevFolder := ""
+	assert.NoError(gcsext.IterateJSONRecordsByFoldersSortedCB(
+		ctx,
+		client.Bucket(baseBucket),
+		"artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_partition_streamer/",
+		func() interface{} {
+			return &testStruct{}
+		},
+		nil,
+		func(folder string, it func() (interface{}, error)) error {
+			assert.NotEqual(folder, prevFolder, "The iterator version of IterateJSONRecordsByFoldersSortedCB should never returns the same folder twice")
+			var rec interface{}
+			var err error
+			for rec, err = it(); err == nil; rec, err = it() {
+				assert.NotNil(rec)
+			}
+			assert.EqualError(err, iterator.ErrIteratorStop.Error())
+			prevFolder = folder
+			return nil
+		},
+	))
+	assert.NotEmpty(prevFolder, "Expected prevFolder to be updated at least once")
+}
