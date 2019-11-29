@@ -58,7 +58,25 @@ func SortGCSFolders(
 		bo = bo.WithMaxAttempts(5).WithMinBackoff(time.Second * 15).WithScale(5) // Add some sane default for our backoff timer
 	}
 
-	return IterateJSONRecordsByFoldersSortedCB(ctx, bucket, prefix, newerAsIf, srcPredicate,
+	// Log all files we have procerssed so we know what we later can delete
+	shouldDeleteOnSuccess := []*storage.ObjectAttrs{}
+	srcPredicateWithLog := func(obj *storage.ObjectAttrs) bool {
+		res := srcPredicate(obj)
+		if res {
+			shouldDeleteOnSuccess = append(shouldDeleteOnSuccess, obj)
+		}
+		return res
+	}
+	canDeletePredicate := func(obj *storage.ObjectAttrs) bool {
+		for _, o := range shouldDeleteOnSuccess {
+			if obj.Name == o.Name {
+				return true
+			}
+		}
+		return false
+	}
+
+	return IterateJSONRecordsByFoldersSortedCB(ctx, bucket, prefix, newerAsIf, srcPredicateWithLog,
 		func(folder string, it func() (interface{}, error)) error {
 			// Setup a reocrd buffer; using the provided cacheFactory for partitions
 			count := 0
@@ -124,11 +142,12 @@ func SortGCSFolders(
 
 			if removeSrcOnSuccess {
 				return RemoveFolder(ctx, bucket, folder, CombineFilters(
-					srcPredicate, // Only remove the orignal files intended for compaction
+					canDeletePredicate, // Only remove the orignal files intended for compaction
 					func(obj *storage.ObjectAttrs) bool { // but also make sure we don't remove the resulting file
 						return obj.Name != dstPath
 					},
 				))
+				shouldDeleteOnSuccess = []*storage.ObjectAttrs{} // Clear the log of files we can delete (since we just deleted them)
 			}
 
 			return nil

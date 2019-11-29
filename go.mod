@@ -9,7 +9,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20191002201903-404acd9df4cc // indirect
 	github.com/google/go-cmp v0.3.1 // indirect
 	github.com/jstemmer/go-junit-report v0.9.1 // indirect
-	github.com/kvanticoss/goutils v0.0.6
+	github.com/kvanticoss/goutils v0.0.9
 	github.com/pkg/errors v0.8.1
 	github.com/stretchr/testify v1.4.0
 	go.opencensus.io v0.22.1 // indirect
@@ -23,3 +23,5 @@ require (
 	google.golang.org/grpc v1.24.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 )
+
+replace github.com/kvanticoss/goutils => ../../kvanticoss/goutils

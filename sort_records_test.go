@@ -33,10 +33,8 @@ func TestSortGCSFolders(t *testing.T) {
 	prefix := "artifacts/kvanticoss/github.com/google-cloudstorage-ext/test_sort_gcs_folders2/"
 	createdFiles := map[string]bool{}
 
+	// Cleanup old tests
 	gcsext.RemoveFolder(ctx, bucket, prefix, nil)
-
-	// Reset bucket handle to avoid timing issues
-	bucket = client.Bucket(baseBucket)
 
 	gcsWf := gcsext.GetGCSWriterFactory(ctx, bucket)
 	var wf writerfactory.WriterFactory = func(path string) (wc eioutil.WriteCloser, err error) {
