@@ -90,7 +90,24 @@ func SortGCSFolders(
 				return cacheFactory()
 			}
 			byteBuffer := recordbuffer.NewSortedRecordBuffers(cacheFactoryWithCounter, newer)
-			byteBuffer.LoadFromRecordIterator(it)
+			_, err := byteBuffer.LoadFromRecordIterator(it)
+			if err != nil && err != iterator.ErrIteratorStop {
+				return errors.Wrap(err, "couldn't load data from iterators")
+			}
+
+			// Get a reader and writer to our compaction file (yes GCS allows to read and write to the same file concurrently)
+			dstPath := path.Join(folder, destinationPrefix)
+			existingReader, gcsWriter, err := getFixedGenerationReadWriters(ctx, bucket, dstPath)
+			if err != nil {
+				return errors.Wrap(err, "couldn't get gcs writer and reader")
+			}
+
+			alreadySortedItems := iterator.JSONRecordIterator(newerAsIf, existingReader)
+			_, err = byteBuffer.LoadFromRecordIterator(alreadySortedItems)
+			if err != nil && err != iterator.ErrIteratorStop {
+				return errors.Wrapf(err, "couldn't load data from %s iterator", prefix)
+			}
+
 			if count == 0 {
 				return nil
 			}
@@ -100,21 +117,7 @@ func SortGCSFolders(
 			if err != nil {
 				return errors.Wrap(err, "failed to get sorted iterator")
 			}
-
-			// Get a reader and writer to our compaction file (yes GCS allows to read and write to the same file concurrently)
-			dstPath := path.Join(folder, destinationPrefix)
-			existingReader, gcsWriter, err := getFixedGenerationReadWriters(ctx, bucket, dstPath)
-			if err != nil {
-				return errors.Wrap(err, "couldn't get gcs writer and reader")
-			}
-			alreadySortedItems := iterator.JSONRecordIterator(newerAsIf, existingReader).ToLesserIterator()
-
-			// Combine bufferd and already sorted records
-			sIt, err := iterator.SortedLesserIterators(append([]iterator.LesserIterator{lessIt}, alreadySortedItems))
-			if err != nil {
-				return errors.Wrap(err, "failed to get sorted iterator from RecordBuffer")
-			}
-			rIt := sIt.ToRecordIterator()
+			rIt := lessIt.ToRecordIterator()
 
 			// Maybe deduplicate
 			if removeDuplicates {
