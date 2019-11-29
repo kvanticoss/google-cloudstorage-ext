@@ -61,6 +61,11 @@ func SortGCSFolders(
 	// Log all files we have procerssed so we know what we later can delete
 	shouldDeleteOnSuccess := []*storage.ObjectAttrs{}
 	srcPredicateWithLog := func(obj *storage.ObjectAttrs) bool {
+		if srcPredicate == nil {
+			shouldDeleteOnSuccess = append(shouldDeleteOnSuccess, obj)
+			return true
+		}
+
 		res := srcPredicate(obj)
 		if res {
 			shouldDeleteOnSuccess = append(shouldDeleteOnSuccess, obj)
@@ -100,7 +105,7 @@ func SortGCSFolders(
 			dstPath := path.Join(folder, destinationPrefix)
 			existingReader, gcsWriter, err := getFixedGenerationReadWriters(ctx, bucket, dstPath)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "couldn't get gcs writer and reader")
 			}
 			alreadySortedItems := iterator.JSONRecordIterator(newerAsIf, existingReader).ToLesserIterator()
 
@@ -141,15 +146,15 @@ func SortGCSFolders(
 			}
 
 			if removeSrcOnSuccess {
-				return RemoveFolder(ctx, bucket, folder, CombineFilters(
+				res := RemoveFolder(ctx, bucket, folder, CombineFilters(
 					canDeletePredicate, // Only remove the orignal files intended for compaction
 					func(obj *storage.ObjectAttrs) bool { // but also make sure we don't remove the resulting file
 						return obj.Name != dstPath
 					},
 				))
 				shouldDeleteOnSuccess = []*storage.ObjectAttrs{} // Clear the log of files we can delete (since we just deleted them)
+				return res
 			}
-
 			return nil
 		},
 	)

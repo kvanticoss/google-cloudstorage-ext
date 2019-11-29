@@ -181,7 +181,7 @@ func FolderReadersByPrefixWithFilter(
 		for {
 			fileName, or, err2 := readerIterator()
 			// Ensure to flush the previous batch of elements we got.
-			if err2 != nil && previousBatch != nil {
+			if err2 != nil && res != nil {
 				previousBatch = nil
 				return lastFolderName, res, nil
 			}
